@@ -1,0 +1,7 @@
+msa:
+  msg-in:
+    name: ftl_msa_msg_in.msa.run
+    dpl_name: msa-msg-in-dpl
+    svc_name:  msa-msg-in-svc
+    igr_name: msa-msg-in-igr
+    health_check_path: /msa/in/_healthy

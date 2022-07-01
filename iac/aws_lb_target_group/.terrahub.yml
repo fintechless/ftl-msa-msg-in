@@ -1,0 +1,4 @@
+component:
+  name: aws_lb_target_group
+  dependsOn:
+    - aws_k8s_ingress

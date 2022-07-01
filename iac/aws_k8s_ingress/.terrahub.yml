@@ -1,0 +1,4 @@
+component:
+  name: aws_k8s_ingress
+  dependsOn:
+    - aws_k8s_service
