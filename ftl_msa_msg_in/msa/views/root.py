@@ -71,20 +71,6 @@ def post() -> Response:
         message_raw=request.data,
         content_type=request_context.headers_context.content_type,
     )
-
-    try:
-        incoming.fill_message_xml()
-        incoming.fill_message_proc()
-        incoming.fill_message_type()
-        incoming.fill_message_version()
-        incoming.fill_message_version_keys()
-    except ValueError as exception:
-        LOGGER.logger.error(exception)
-        raise ExceptionInvalidRequest(
-            message="Received an invalid incoming message",
-            request_context=request_context,
-        ) from exception
-
     # Required models and providers
     transaction: ModelTransaction = ModelTransaction(
         request_context=request_context, environ_context=environ_context
@@ -101,11 +87,58 @@ def post() -> Response:
 
     try:
         incoming.upload_to_storage(incoming=True)
+        incoming.fill_message_xml()
+        incoming.fill_message_proc()
+        incoming.fill_message_version(from_header=request_context.headers_context.message_type)
+        
+        incoming.fill_message_type()
+        incoming.fill_message_version_keys()
+    except Exception as exception:
+        LOGGER.logger.error(exception)
+        # Invalid incoming message
+        transaction.reject(
+            storage_path=incoming.storage_path.key,
+            message_type=incoming.message_version,
+            ht_response_code="FF02",
+            ht_response_message="RJCT",
+            currency="N/A",
+            amount=0
+        )
+        raise ExceptionInvalidRequest(
+            message="Received an invalid incoming message",
+            request_context=request_context,
+        ) from exception
+
+    try:
+        if not transaction.exists():
+            LOGGER.logger.error("Could not find such transaction ID token")
+            # Invalid transaction_id token
+            transaction.reject(
+                storage_path=incoming.storage_path.key,
+                message_type=incoming.message_version,
+                ht_response_code="TK01",
+                ht_response_message="RJCT",
+                currency=incoming.message_proc.currency,
+                amount=incoming.message_proc.amount
+            )
+            raise ExceptionResourceNotFound(
+                message="Could not find such transaction ID token",
+                request_context=request_context,
+            )
 
         if not transaction.is_transaction_initiated():
-            LOGGER.logger.error("Could not find such transaction")
+            LOGGER.logger.error("Transaction ID token has expired")
+            # Expired transaction_id token
+            transaction.reject(
+                storage_path=incoming.storage_path.key,
+                message_type=incoming.message_version,
+                ht_response_code="TK04",
+                ht_response_message="RJCT",
+                currency=incoming.message_proc.currency,
+                amount=incoming.message_proc.amount
+            )
             raise ExceptionResourceNotFound(
-                message="Could not find such transaction",
+                message="Transaction ID token has expired",
                 request_context=request_context,
             )
 
@@ -121,6 +154,15 @@ def post() -> Response:
         with UtilsXmlValidation(xsd=xsd_body, xml=incoming.message_xml) as uxml:
             if uxml.is_valid() is False:
                 LOGGER.logger.error("Received an invalid XML message")
+                # Invalid incoming message based on schema
+                transaction.reject(
+                    storage_path=incoming.storage_path.key,
+                    message_type=incoming.message_version,
+                    ht_response_code="FF02",
+                    ht_response_message="RJCT",
+                    currency=incoming.message_proc.currency,
+                    amount=incoming.message_proc.amount
+                )
                 raise ExceptionInvalidRequest(
                     message="Received an invalid XML message",
                     request_context=request_context,
@@ -129,6 +171,10 @@ def post() -> Response:
         transaction.receive(
             storage_path=incoming.storage_path.key,
             message_type=incoming.message_version,
+            ht_response_code="ACTC",
+            ht_response_message="ACTC",
+            currency=incoming.message_proc.currency,
+            amount=incoming.message_proc.amount
         )
         mapping_response: MircoserviceApiMappingResponse = mapping.get(
             params={
@@ -171,11 +217,6 @@ def post() -> Response:
         )
     except (ExceptionInvalidRequest, ExceptionResourceNotFound) as exception:
         LOGGER.logger.error(exception)
-        if request_context.transaction_id is not None:
-            transaction.reject(
-                storage_path=incoming.storage_path.key,
-                message_type=incoming.message_version,
-            )
 
         mapping_response: MircoserviceApiMappingResponse = mapping.get(
             params={
